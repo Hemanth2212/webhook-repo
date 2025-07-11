@@ -4,6 +4,7 @@ from flask import Flask, request, jsonify, render_template
 from pymongo import MongoClient
 from bson.objectid import ObjectId
 import datetime
+from datetime import datetime, timezone
 from dateutil import parser
 import os
 
@@ -38,7 +39,7 @@ def webhook():
             event_type = 'pull_request'
 
     data['event_type'] = event_type
-    data['received_at'] = datetime.datetime.utcnow()
+    data['received_at'] = datetime.now(timezone.utc)
 
     db.events.insert_one(data)
     print(f"🔔 Webhook stored: {data['event_type']}")
