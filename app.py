@@ -2,11 +2,8 @@
 
 from flask import Flask, request, jsonify, render_template
 from pymongo import MongoClient
-from bson.objectid import ObjectId
-import datetime
-from datetime import datetime, timezone
 from dateutil import parser
-import os
+from datetime import datetime, timezone
 
 app = Flask(__name__)
 
@@ -28,64 +25,75 @@ def webhook():
     if not data:
         return "No data received", 400
 
-    # Determine event type
+    schema_doc = {}
     event_type = None
+
+    # Handle Push event
     if 'commits' in data:
-        event_type = 'push'
+        event_type = 'PUSH'
+        commit = data['commits'][0]
+        schema_doc = {
+            "request_id": commit['id'],                         # commit SHA
+            "author": commit['author']['name'],                 # commit author
+            "action": event_type,
+            "from_branch": None,                                # push has no source branch
+            "to_branch": data['ref'].split('/')[-1],            # branch name from ref
+            "timestamp": parser.parse(commit['timestamp'])      # commit timestamp
+        }
+
+    # Handle Pull Request event (including merge)
     elif 'pull_request' in data:
-        if data['pull_request'].get('merged'):
-            event_type = 'merge'
-        else:
-            event_type = 'pull_request'
+        pr = data['pull_request']
+        event_type = 'MERGE' if pr.get('merged') else 'PULL_REQUEST'
+        schema_doc = {
+            "request_id": str(pr["id"]),                         # PR ID
+            "author": pr["user"]["login"],                       # PR author
+            "action": event_type,
+            "from_branch": pr["head"]["ref"],                    # source branch
+            "to_branch": pr["base"]["ref"],                       # target branch
+            "timestamp": parser.parse(pr.get("merged_at") or pr.get("created_at") or pr.get("updated_at"))
+        }
 
-    data['event_type'] = event_type
-    data['received_at'] = datetime.now(timezone.utc)
+    else:
+        return "Event type not handled", 400
 
-    db.events.insert_one(data)
-    print(f"🔔 Webhook stored: {data['event_type']}")
+    # Insert formatted document to MongoDB
+    db.events.insert_one(schema_doc)
+    print(f"🔔 Webhook stored: {schema_doc['action']} event by {schema_doc['author']}")
     return "OK", 200
 
 @app.route('/events')
 def get_events():
-    events = db.events.find().sort("received_at", -1).limit(10)
+    events = db.events.find().sort("timestamp", -1).limit(10)
     output = []
 
     for e in events:
-        event_type = e.get("event_type")
+        dt = e.get("timestamp")
+        if not dt:
+            # Skip this event if timestamp missing
+            continue
 
-        if event_type == "push":
-            author = e['commits'][0]['author']['name']
-            to_branch = e['ref'].split('/')[-1]
-            dt = parser.parse(e['commits'][0]['timestamp'])
-            day_with_suffix = get_day_with_suffix(dt.day)
-            timestamp = f"{day_with_suffix} {dt.strftime('%B %Y - %#I:%M %p UTC')}"
-            message = f'"{author}" pushed to "{to_branch}" on {timestamp}'
-            output.append({"message": message})
+        action = e.get("action")
+        author = e.get("author")
+        from_branch = e.get("from_branch")
+        to_branch = e.get("to_branch")
 
-        elif event_type == "pull_request":
-            pr = e["pull_request"]
-            author = pr["user"]["login"]
-            from_branch = pr["head"]["ref"]
-            to_branch = pr["base"]["ref"]
-            dt = parser.parse(pr["created_at"])
-            day_with_suffix = get_day_with_suffix(dt.day)
-            timestamp = f"{day_with_suffix} {dt.strftime('%B %Y - %#I:%M %p UTC')}"
-            message = f'"{author}" submitted a pull request from "{from_branch}" to "{to_branch}" on {timestamp}'
-            output.append({"message": message})
+        day_with_suffix = get_day_with_suffix(dt.day)
+        timestamp_str = f"{day_with_suffix} {dt.strftime('%B %Y - %#I:%M %p UTC')}"
 
-        elif event_type == "merge":
-            pr = e["pull_request"]
-            author = pr["user"]["login"]
-            from_branch = pr["head"]["ref"]
-            to_branch = pr["base"]["ref"]
-            merged_at = pr.get("merged_at") or pr.get("updated_at")
-            dt = parser.parse(merged_at)
-            day_with_suffix = get_day_with_suffix(dt.day)
-            timestamp = f"{day_with_suffix} {dt.strftime('%B %Y - %#I:%M %p UTC')}"
-            message = f'"{author}" merged branch "{from_branch}" to "{to_branch}" on {timestamp}'
-            output.append({"message": message})
+        if action == "PUSH":
+            message = f'"{author}" pushed to "{to_branch}" on {timestamp_str}'
+        elif action == "PULL_REQUEST":
+            message = f'"{author}" submitted a pull request from "{from_branch}" to "{to_branch}" on {timestamp_str}'
+        elif action == "MERGE":
+            message = f'"{author}" merged branch "{from_branch}" to "{to_branch}" on {timestamp_str}'
+        else:
+            message = f"Unknown event type: {action}"
+
+        output.append({"message": message})
 
     return jsonify(output)
+
 
 @app.route('/')
 def index():
