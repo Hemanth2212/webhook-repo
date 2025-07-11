@@ -1,5 +1,3 @@
-# webhook-repo/app.py
-
 from flask import Flask, request, jsonify, render_template
 from pymongo import MongoClient
 from dateutil import parser
@@ -28,20 +26,18 @@ def webhook():
     schema_doc = {}
     event_type = None
 
-    # Handle Push event
     if 'commits' in data:
         event_type = 'PUSH'
         commit = data['commits'][0]
         schema_doc = {
-            "request_id": commit['id'],                         # commit SHA
-            "author": commit['author']['name'],                 # commit author
+            "request_id": commit['id'],
+            "author": data.get('pusher', {}).get('name', commit['author']['name']),
             "action": event_type,
-            "from_branch": None,                                # push has no source branch
-            "to_branch": data['ref'].split('/')[-1],            # branch name from ref
-            "timestamp": parser.parse(commit['timestamp'])      # commit timestamp
+            "from_branch": None,
+            "to_branch": data['ref'].split('/')[-1],
+            "timestamp": parser.parse(commit['timestamp'])
         }
 
-    # Handle Pull Request event (including merge)
     elif 'pull_request' in data:
         pr = data['pull_request']
         event_type = 'MERGE' if pr.get('merged') else 'PULL_REQUEST'
@@ -93,7 +89,6 @@ def get_events():
         output.append({"message": message})
 
     return jsonify(output)
-
 
 @app.route('/')
 def index():
