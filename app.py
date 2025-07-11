@@ -5,8 +5,13 @@ from datetime import datetime, timezone
 
 app = Flask(__name__)
 
-# Connect to MongoDB Atlas
-client = MongoClient("mongodb+srv://hemanthhem51926:MtSZuSZzwfbbpzeH@cluster0.3yygfkr.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
+# ✅ Connect to MongoDB Atlas with TLS bypass for local testing
+client = MongoClient(
+    "mongodb+srv://hemanthhem51926:MtSZuSZzwfbbpzeH@cluster0.3yygfkr.mongodb.net/?retryWrites=true&w=majority",
+    tls=True,
+    tlsAllowInvalidCertificates=True
+)
+
 db = client.webhookDB
 
 # Helper: Add ordinal suffix to day
@@ -23,9 +28,12 @@ def webhook():
     if not data:
         return "No data received", 400
 
+    print("📩 Incoming data:", data)  # Debugging print
+
     schema_doc = {}
     event_type = None
 
+    # ✅ Handle Push event
     if 'commits' in data:
         event_type = 'PUSH'
         commit = data['commits'][0]
@@ -38,22 +46,23 @@ def webhook():
             "timestamp": parser.parse(commit['timestamp'])
         }
 
+    # ✅ Handle Pull Request event (including merge)
     elif 'pull_request' in data:
         pr = data['pull_request']
         event_type = 'MERGE' if pr.get('merged') else 'PULL_REQUEST'
         schema_doc = {
-            "request_id": str(pr["id"]),                         # PR ID
-            "author": pr["user"]["login"],                       # PR author
+            "request_id": str(pr["id"]),
+            "author": pr["user"]["login"],
             "action": event_type,
-            "from_branch": pr["head"]["ref"],                    # source branch
-            "to_branch": pr["base"]["ref"],                       # target branch
+            "from_branch": pr["head"]["ref"],
+            "to_branch": pr["base"]["ref"],
             "timestamp": parser.parse(pr.get("merged_at") or pr.get("created_at") or pr.get("updated_at"))
         }
 
     else:
         return "Event type not handled", 400
 
-    # Insert formatted document to MongoDB
+    # ✅ Insert formatted document to MongoDB
     db.events.insert_one(schema_doc)
     print(f"🔔 Webhook stored: {schema_doc['action']} event by {schema_doc['author']}")
     return "OK", 200
@@ -66,7 +75,6 @@ def get_events():
     for e in events:
         dt = e.get("timestamp")
         if not dt:
-            # Skip this event if timestamp missing
             continue
 
         action = e.get("action")
